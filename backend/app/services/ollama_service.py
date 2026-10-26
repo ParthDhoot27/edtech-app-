@@ -1,0 +1,266 @@
+from __future__ import annotations
+
+import base64
+import time
+from typing import Any
+
+import httpx
+
+from app.core.prompts import (
+    build_chat_prompt,
+    build_mcq_prompt,
+    build_solver_chat_prompt,
+    build_summary_chunk_prompt,
+    build_summary_prompt,
+    build_summary_reduce_prompt,
+    build_summary_synthesis_prompt,
+    build_summary_validation_prompt,
+)
+from app.models.schemas import ChatMessage, MCQItem, StructuredSummary
+from app.services.llm_utils import extract_json_payload, normalize_mcq_item, normalize_summary
+from app.services.pipeline_utils import clean_transcript_text, split_into_chunks, validate_structured_summary
+
+
+class OllamaService:
+    def __init__(
+        self,
+        base_url: str,
+        model_name: str,
+        enabled: bool = True,
+        request_timeout_seconds: float = 8.0,
+        retry_cooldown_seconds: float = 60.0,
+    ) -> None:
+        self._enabled = enabled
+        self._base_url = base_url.rstrip("/")
+        self._model_name = model_name
+        self._request_timeout_seconds = max(1.0, float(request_timeout_seconds))
+        self._retry_cooldown_seconds = max(0.0, float(retry_cooldown_seconds))
+        self._retry_after_monotonic = 0.0
+        self._last_unavailable_reason = ""
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    def _check_retry_window(self) -> None:
+        if self._retry_after_monotonic and time.monotonic() < self._retry_after_monotonic:
+            if self._last_unavailable_reason:
+                raise RuntimeError(
+                    "Ollama is temporarily unavailable. "
+                    f"Last error: {self._last_unavailable_reason}"
+                )
+            raise RuntimeError("Ollama is temporarily unavailable.")
+
+    def _mark_unavailable(self, reason: str) -> None:
+        self._last_unavailable_reason = reason.strip() or "Unknown Ollama error."
+        if self._retry_cooldown_seconds > 0:
+            self._retry_after_monotonic = time.monotonic() + self._retry_cooldown_seconds
+
+    def _clear_unavailable(self) -> None:
+        self._retry_after_monotonic = 0.0
+        self._last_unavailable_reason = ""
+
+    def list_models(self) -> list[str]:
+        if not self._enabled:
+            return []
+        try:
+            url = f"{self._base_url}/api/tags"
+            resp = httpx.get(url, timeout=3.0)
+            if resp.status_code == 200:
+                data = resp.json()
+                return [m.get("name", "") for m in data.get("models", []) if m.get("name")]
+        except Exception:
+            pass
+        return []
+
+    def _generate(
+        self,
+        prompt: str,
+        temperature: float = 0.2,
+        images: list[str] | None = None,
+        model: str | None = None,
+    ) -> str:
+        if not self._enabled:
+            raise RuntimeError("Ollama is disabled.")
+
+        self._check_retry_window()
+
+        url = f"{self._base_url}/api/generate"
+        payload: dict[str, Any] = {
+            "model": model or self._model_name,
+            "prompt": prompt,
+            "stream": False,
+            "options": {
+                "temperature": temperature,
+            },
+        }
+        if images:
+            payload["images"] = images
+
+        try:
+            response = httpx.post(url, json=payload, timeout=self._request_timeout_seconds)
+        except Exception as exc:
+            self._mark_unavailable(str(exc))
+            raise RuntimeError(f"Ollama request failed: {exc}") from exc
+
+        if response.status_code >= 400:
+            message = f"Ollama request failed ({response.status_code}): {response.text.strip()}"
+            self._mark_unavailable(message)
+            raise RuntimeError(message)
+
+        try:
+            data = response.json()
+        except Exception as exc:
+            self._mark_unavailable(f"Ollama returned non-JSON response: {exc}")
+            raise RuntimeError(f"Ollama returned non-JSON response: {exc}") from exc
+
+        text = str(data.get("response", "")).strip()
+        if not text:
+            self._mark_unavailable("Ollama returned an empty response.")
+            raise RuntimeError("Ollama returned an empty response.")
+
+        self._clear_unavailable()
+        return text
+
+    def pull_model(self, model_name: str) -> str:
+        """Pull a model from Ollama registry.
+
+        This triggers Ollama to download the specified model. The request
+        streams progress information; we simply wait for the request to finish
+        and return a short status message.
+        """
+        if not self._enabled:
+            raise RuntimeError("Ollama is disabled.")
+
+        # Ollama pull endpoint – POST /api/pull with JSON {"name": "model"}
+        url = f"{self._base_url}/api/pull"
+        payload = {"name": model_name}
+        try:
+            response = httpx.post(url, json=payload, timeout=self._request_timeout_seconds)
+        except Exception as exc:
+            self._mark_unavailable(str(exc))
+            raise RuntimeError(f"Ollama pull request failed: {exc}") from exc
+
+        if response.status_code >= 400:
+            message = f"Ollama pull failed ({response.status_code}): {response.text.strip()}"
+            self._mark_unavailable(message)
+            raise RuntimeError(message)
+
+        # Ollama may stream progress; we ignore the body and just confirm success.
+        self._clear_unavailable()
+        return f"Model '{model_name}' pull initiated successfully."
+
+        response_text = self._generate(prompt=prompt, temperature=temperature, model=model)
+
+        try:
+            return extract_json_payload(response_text)
+        except Exception:
+            retry_prompt = prompt + "\n\nReturn JSON only. No markdown."
+            retry_text = self._generate(prompt=retry_prompt, temperature=max(0.1, temperature - 0.1), model=model)
+            return extract_json_payload(retry_text)
+        except Exception:
+            retry_prompt = prompt + "\n\nReturn JSON only. No markdown."
+            retry_text = self._generate(prompt=retry_prompt, temperature=max(0.1, temperature - 0.1))
+            return extract_json_payload(retry_text)
+
+    def summarize(self, transcript: str) -> StructuredSummary:
+        cleaned = clean_transcript_text(transcript)
+        chunks = split_into_chunks(cleaned, max_chars=2400, overlap_chars=200, max_chunks=8)
+
+        if not chunks:
+            data = self._generate_json(build_summary_prompt(cleaned), temperature=0.2)
+            if not isinstance(data, dict):
+                raise RuntimeError("Could not parse structured summary from Ollama response.")
+            return validate_structured_summary(normalize_summary(data), cleaned)
+
+        chunk_notes: list[dict[str, Any]] = []
+        for index, chunk in enumerate(chunks, start=1):
+            chunk_data = self._generate_json(
+                build_summary_chunk_prompt(chunk_text=chunk, chunk_index=index, total_chunks=len(chunks)),
+                temperature=0.2,
+            )
+            if isinstance(chunk_data, dict):
+                chunk_notes.append(chunk_data)
+
+        reduced_data = self._generate_json(build_summary_reduce_prompt(chunk_notes), temperature=0.2)
+        reduced = reduced_data if isinstance(reduced_data, dict) else {}
+
+        candidate_data = self._generate_json(
+            build_summary_synthesis_prompt(reduced_notes=reduced, transcript_excerpt=cleaned),
+            temperature=0.2,
+        )
+        candidate = candidate_data if isinstance(candidate_data, dict) else reduced
+
+        validated_data = self._generate_json(
+            build_summary_validation_prompt(candidate_summary=candidate, reduced_notes=reduced),
+            temperature=0.1,
+        )
+        final_data = validated_data if isinstance(validated_data, dict) else candidate
+
+        if not isinstance(final_data, dict):
+            raise RuntimeError("Could not parse structured summary from Ollama response.")
+
+        summary = normalize_summary(final_data)
+        return validate_structured_summary(summary, cleaned)
+
+    def chat(
+        self,
+        message: str,
+        summary: StructuredSummary,
+        history: list[ChatMessage],
+        context_chunks: list[str] | None = None,
+    ) -> str:
+        history_payload = [item.model_dump() for item in history]
+        prompt = build_chat_prompt(
+            summary=summary.model_dump(),
+            message=message,
+            history=history_payload,
+            context_chunks=context_chunks or [],
+        )
+        return self._generate(prompt=prompt, temperature=0.3)
+
+    def generate_mcqs(self, summary: StructuredSummary, context_chunks: list[str] | None = None) -> list[MCQItem]:
+        prompt = build_mcq_prompt(summary.model_dump(), context_chunks=context_chunks or [])
+        response_text = self._generate(prompt=prompt, temperature=0.3)
+
+        try:
+            data = extract_json_payload(response_text)
+        except Exception:
+            retry_prompt = prompt + "\n\nReturn JSON only."
+            data = extract_json_payload(self._generate(retry_prompt, temperature=0.1))
+
+        if isinstance(data, dict):
+            mcq_items = data.get("mcqs", [])
+        elif isinstance(data, list):
+            mcq_items = data
+        else:
+            raise RuntimeError("Could not parse MCQ JSON response from Ollama.")
+
+        if not isinstance(mcq_items, list) or not mcq_items:
+            raise RuntimeError("Ollama MCQ response is empty.")
+
+        normalized = [normalize_mcq_item(item) for item in mcq_items if isinstance(item, dict)]
+        if len(normalized) < 5:
+            raise RuntimeError("Ollama did not produce enough MCQs.")
+
+        return normalized[:10]
+
+    def solver_chat(
+        self,
+        message: str,
+        history: list[ChatMessage],
+        image_bytes: bytes | None = None,
+        image_mime_type: str | None = None,
+        image_data_url: str | None = None,
+    ) -> str:
+        del image_mime_type
+        del image_data_url
+
+        history_payload = [item.model_dump() for item in history]
+        prompt = build_solver_chat_prompt(message=message, history=history_payload)
+
+        images: list[str] | None = None
+        if image_bytes:
+            images = [base64.b64encode(image_bytes).decode("utf-8")]
+
+        return self._generate(prompt=prompt, temperature=0.3, images=images)
