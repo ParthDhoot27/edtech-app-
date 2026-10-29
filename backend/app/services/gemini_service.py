@@ -246,7 +246,16 @@ class GeminiService:
 
     def summarize(self, transcript: str) -> StructuredSummary:
         cleaned = clean_transcript_text(transcript)
-        data = self._generate_json(build_summary_prompt(cleaned), temperature=0.2)
+        prompt = build_summary_prompt(cleaned)
+        data = self._generate_json(prompt, temperature=0.2)
+
+        if not isinstance(data, dict):
+            data = self._generate_json(
+                prompt
+                + "\n\nYour previous response was valid JSON but had the wrong top-level shape. "
+                + "Return exactly one JSON object with the schema above, not an array or scalar.",
+                temperature=0.1,
+            )
 
         if not isinstance(data, dict):
             raise RuntimeError("Could not parse structured summary from model response.")
