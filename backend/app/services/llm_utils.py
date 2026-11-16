@@ -22,12 +22,34 @@ def extract_json_payload(text: str) -> Any:
         return json.loads(payload)
 
 
+def _format_point(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float, bool)):
+        return str(value)
+    if isinstance(value, list):
+        return "\n".join(point for item in value if (point := _format_point(item)))
+    if isinstance(value, dict):
+        lines = []
+        for key, item in value.items():
+            label = re.sub(r"[_-]+", " ", str(key)).title()
+            formatted_item = _format_point(item)
+            if formatted_item:
+                lines.append(f"{label}: {formatted_item}")
+        return "\n".join(lines)
+    return ""
+
+
 def clean_points(value: Any) -> list[str]:
     if isinstance(value, list):
-        return [str(item).strip() for item in value if str(item).strip()]
+        return [point for item in value if (point := _format_point(item))]
 
     if isinstance(value, str):
         return [chunk.strip(" -") for chunk in value.split("\n") if chunk.strip()]
+
+    if isinstance(value, dict):
+        point = _format_point(value)
+        return [point] if point else []
 
     return []
 
@@ -42,7 +64,7 @@ def normalize_summary(data: dict[str, Any]) -> StructuredSummary:
     )
 
     return StructuredSummary(
-        overview_paragraphs=clean_points(overview)[:3],
+        overview_paragraphs=clean_points(overview),
         key_definitions=clean_points(data.get("key_definitions", [])),
         core_concepts=clean_points(data.get("core_concepts", [])),
         important_examples=clean_points(data.get("important_examples", [])),

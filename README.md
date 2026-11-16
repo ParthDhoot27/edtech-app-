@@ -84,7 +84,7 @@ Open Settings from the navbar and save a Gemini API key for the current browser 
 
 The provider selector offers Gemini and Ollama. In Ollama mode, the browser contacts the user's Ollama instance directly at the configured local URL (default `http://127.0.0.1:11434`). Prompts, transcripts used for generation, images, and generated answers are not sent to the app backend by the Ollama generation calls. The selected URL and model are saved in browser local storage.
 
-Install Ollama, download at least one model, and start Ollama with the exact origin of the website allowed. For local development on the default Vite port:
+Install Ollama and download at least one model. For a terminal-managed Ollama process, start it with the exact origin of the website allowed. For local development on the default Vite port:
 
 ```bash
 ollama pull qwen2.5-coder:7b
@@ -99,7 +99,9 @@ $env:OLLAMA_ORIGINS = "http://localhost:3000"
 ollama serve
 ```
 
-If Ollama is already running as a desktop app or service, stop it first and configure `OLLAMA_ORIGINS` for that process before restarting. Open the website, select **Ollama (local)**, expand **Ollama setup**, check the connection, and select one of the models listed as installed. If Vite uses another port, or the site is deployed, allow that exact origin instead, including its scheme and port. Do not use `*` for a public website.
+If Ollama is already running in the background, do not start a second `ollama serve` process; configure the existing app or service and restart it. The **Ollama setup** panel provides a Linux systemd command for this case and a separate terminal command. The service command writes a late-sorting drop-in so its origin setting takes precedence over existing service overrides. Open the website, select **Ollama (local)**, expand **Ollama setup**, check the connection, and select one of the models listed as installed.
+
+`OLLAMA_ORIGINS` must contain the exact browser origin, including scheme and port. Local development typically uses `http://localhost:3000`. In production, each user's Ollama must allow the deployed website origin; the app backend cannot change settings on a visitor's computer. If using the same Ollama from both development and production, configure both exact origins as a comma-separated list. Do not use `*` for a public website.
 
 For a deployed HTTPS website, the visitor's browser still connects to Ollama on that visitor's computer; the remote app backend cannot reach it. Browser local-network permission and mixed-content policies can block that connection in some browser/deployment combinations. The UI reports connection/CORS failures, but users may need to grant browser permission or use a compatible browser. Ollama mode does not silently fall back to Gemini.
 

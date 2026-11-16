@@ -6,6 +6,37 @@ import {
   saveOllamaSettings,
 } from "../services/api";
 
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Fall back for browsers that reject clipboard access on an HTTP origin.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+
+  let copied;
+  try {
+    textarea.focus();
+    textarea.select();
+    copied = document.execCommand("copy");
+  } finally {
+    textarea.remove();
+  }
+
+  if (!copied) {
+    throw new Error("Clipboard access is unavailable.");
+  }
+}
+
 function OllamaSetup() {
   const [baseUrl, setBaseUrl] = useState("");
   const [model, setModel] = useState("");
@@ -15,6 +46,8 @@ function OllamaSetup() {
   const [connectionAvailable, setConnectionAvailable] = useState(false);
   const [showOriginHelp, setShowOriginHelp] = useState(false);
   const siteOrigin = window.location.origin;
+  const terminalCommand = `OLLAMA_ORIGINS="${siteOrigin}" ollama serve`;
+  const systemdCommand = `sudo mkdir -p /etc/systemd/system/ollama.service.d && printf '[Service]\\nEnvironment="OLLAMA_ORIGINS=${siteOrigin}"\\n' | sudo tee /etc/systemd/system/ollama.service.d/zz-ollama-origins.conf >/dev/null && sudo systemctl daemon-reload && sudo systemctl restart ollama`;
 
   const checkOllama = async (url = baseUrl, preferredModel = model) => {
     setIsChecking(true);
@@ -55,10 +88,13 @@ function OllamaSetup() {
     saveOllamaSettings({ baseUrl, model: event.target.value });
   };
 
-  const copyCorsCommand = async () => {
-    const command = `OLLAMA_ORIGINS="${siteOrigin}" ollama serve`;
-    await navigator.clipboard.writeText(command);
-    setStatus("Origin command copied. Stop the existing Ollama process before restarting it with this setting.");
+  const copyCommand = async (command, successMessage) => {
+    try {
+      await copyTextToClipboard(command);
+      setStatus(successMessage);
+    } catch (error) {
+      setStatus(`Could not copy the command automatically (${error.message}). Select and copy it below.`);
+    }
   };
 
   return (
@@ -89,9 +125,14 @@ function OllamaSetup() {
         )}
         {showOriginHelp && (
           <div className="space-y-2 rounded border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
-            <p>Ollama must allow this exact website origin: <code className="break-all">{siteOrigin}</code>. Configure <code>OLLAMA_ORIGINS</code> for Ollama and restart it. Do not use a wildcard on a public computer.</p>
-            <button type="button" className="secondary-btn w-full" onClick={copyCorsCommand}>Copy Linux/macOS start command</button>
-            <p>The command is for a terminal-managed Ollama process. If Ollama runs as a desktop app or service, set the same environment variable for that app/service and restart it. HTTPS websites may also be restricted by browser local-network or mixed-content policies.</p>
+            <p>Ollama must allow this exact website origin: <code className="break-all">{siteOrigin}</code>. This setting belongs to the Ollama process on each user&apos;s computer, not the app backend. Do not use a wildcard on a public computer.</p>
+            <p>If Ollama is already running as a Linux systemd service, copy this command to add the origin and restart that service:</p>
+            <button type="button" className="secondary-btn w-full" onClick={() => copyCommand(systemdCommand, "Linux Ollama service command copied. Run it in a terminal; it will prompt for your sudo password.")}>Copy Linux service command</button>
+            <code className="block select-all break-all rounded bg-slate-900 p-2">{systemdCommand}</code>
+            <p>For a terminal-managed Ollama process, stop the existing process first, then use:</p>
+            <button type="button" className="secondary-btn w-full" onClick={() => copyCommand(terminalCommand, "Terminal start command copied. Stop the existing Ollama process before running it.")}>Copy Linux/macOS terminal command</button>
+            <code className="block select-all break-all rounded bg-slate-900 p-2">{terminalCommand}</code>
+            <p>For a deployed site, allow its exact origin (including HTTPS and port) on each user&apos;s Ollama; the app backend cannot configure their computer. HTTPS websites may also be restricted by browser local-network or mixed-content policies.</p>
           </div>
         )}
       </div>

@@ -8,7 +8,7 @@ const spotlightCards = [
     body: "Paste a YouTube URL and get instant title, thumbnail, and context before generation.",
   },
   {
-    title: "3-Paragraph Synthesis",
+    title: "Detailed Study Synthesis",
     body: "Multi-pass pipeline produces coherent lecture understanding, not shallow bullet spam.",
   },
   {

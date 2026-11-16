@@ -34,7 +34,7 @@ function SectionBlock({ title, items, defaultOpen = false }) {
             <div className="space-y-2 border-t border-slate-700/70 px-4 pb-4 pt-3 text-sm text-slate-200">
               {items?.length ? (
                 items.map((item, index) => (
-                  <p key={`${title}-${index}`} className="leading-6">
+                  <p key={`${title}-${index}`} className="whitespace-pre-line leading-6">
                     {index + 1}. {item}
                   </p>
                 ))

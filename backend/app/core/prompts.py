@@ -16,7 +16,7 @@ You are an expert academic assistant. Create a structured study summary from the
 
 Return ONLY valid JSON with this exact schema:
 {{
-  "overview_paragraphs": ["paragraph 1", "paragraph 2", "paragraph 3"],
+  "overview_paragraphs": ["paragraph 1", "paragraph 2"],
   "key_definitions": ["string"],
   "core_concepts": ["string"],
   "important_examples": ["string"],
@@ -24,9 +24,12 @@ Return ONLY valid JSON with this exact schema:
 }}
 
 Rules:
-- Exactly 3 overview paragraphs.
-- 4 to 8 bullet points per array.
-- Keep each bullet concise, academic, and exam-focused.
+- Use as many overview paragraphs and items as needed to explain the full topic; do not enforce a fixed count.
+- Write a thorough, well-organized explanation that connects the main ideas, methods, assumptions, and implications.
+- Explain why each important concept matters, how it relates to other ideas, and where it is useful.
+- Make examples concrete: explain the setup, reasoning, result, and what the example teaches.
+- Make revision points useful for exam preparation, including likely misconceptions or gaps in the provided material.
+- Keep every claim grounded in the transcript. Clearly distinguish implications from facts stated by the source.
 - Avoid repeating ideas across sections.
 - If transcript is noisy, infer the most likely educational intent.
 
@@ -99,7 +102,7 @@ Use the reduced notes and transcript excerpt to produce final structured output.
 
 Return ONLY valid JSON with this exact schema:
 {{
-  "overview_paragraphs": ["paragraph 1", "paragraph 2", "paragraph 3"],
+  "overview_paragraphs": ["paragraph 1", "paragraph 2"],
   "key_definitions": ["string"],
   "core_concepts": ["string"],
   "important_examples": ["string"],
@@ -107,10 +110,11 @@ Return ONLY valid JSON with this exact schema:
 }}
 
 Rules:
-- Exactly 3 coherent overview paragraphs.
-- 4 to 8 items per bullet section.
-- No redundancy across sections.
-- Keep exam preparation focus.
+- Use as many overview paragraphs and items as needed to explain the full topic; do not enforce a fixed count.
+- Explain the significance and relationships of concepts, and develop examples with their reasoning and applications.
+- Include exam-relevant implications and possible blind spots, but label any inference not stated in the transcript.
+- Preserve factual accuracy and source grounding; do not add unsupported facts.
+- Avoid redundancy across sections.
 
 Reduced notes:
 {reduced_payload}
@@ -129,7 +133,7 @@ Validate and improve this lecture summary for factual consistency and clarity.
 
 Return ONLY valid JSON with this exact schema:
 {{
-  "overview_paragraphs": ["paragraph 1", "paragraph 2", "paragraph 3"],
+  "overview_paragraphs": ["paragraph 1", "paragraph 2"],
   "key_definitions": ["string"],
   "core_concepts": ["string"],
   "important_examples": ["string"],
@@ -137,9 +141,10 @@ Return ONLY valid JSON with this exact schema:
 }}
 
 Validation checklist:
-- Keep exactly 3 overview paragraphs.
+- Keep as many overview paragraphs and items as needed to cover the source without a fixed count.
 - Remove repetitions.
 - Keep only claims supported by reduced notes.
+- Make concepts explain why they matter and examples explain their application, without inventing facts.
 - Improve clarity and exam relevance.
 
 Candidate summary:

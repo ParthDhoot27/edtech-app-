@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     ollama_enabled: bool = True
     ollama_base_url: str = "http://127.0.0.1:11434"
     ollama_model: str = "llama3.2:3b"
-    ollama_timeout_seconds: float = 90.0
+    ollama_timeout_seconds: float = 600.0
     ollama_retry_cooldown_seconds: int = 60
     cors_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     cors_origin_regex: str = (

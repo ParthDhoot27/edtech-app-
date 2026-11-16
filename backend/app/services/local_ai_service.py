@@ -7,7 +7,7 @@ from collections import Counter
 from app.models.schemas import ChatMessage, MCQItem, StructuredSummary
 from app.services.pipeline_utils import (
     STOPWORDS,
-    build_three_paragraph_overview,
+    build_source_overview,
     clean_transcript_text,
     dedupe_strings,
     select_top_chunks_for_query,
@@ -225,7 +225,7 @@ class LocalAIService:
             all_examples.extend(chunk_output["examples"])
             all_revision.extend(chunk_output["revision"])
 
-        overview_paragraphs = build_three_paragraph_overview(
+        overview_paragraphs = build_source_overview(
             source_text=cleaned,
             concepts=all_concepts,
         )

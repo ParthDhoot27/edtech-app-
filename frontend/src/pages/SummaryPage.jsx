@@ -9,7 +9,7 @@ import { downloadPdf, generateMcq, getErrorMessage } from "../services/api";
 
 function formatSummaryForClipboard(summary) {
   const sections = [
-    ["Lecture Synthesis (3 Paragraphs)", summary.overview_paragraphs],
+    ["Detailed Topic Summary", summary.overview_paragraphs],
     ["Key Definitions", summary.key_definitions],
     ["Core Concepts", summary.core_concepts],
     ["Important Examples", summary.important_examples],

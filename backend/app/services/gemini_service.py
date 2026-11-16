@@ -201,7 +201,11 @@ class GeminiService:
             or len(cleaned) <= SINGLE_PASS_SUMMARY_MAX_CHARS
             or len(chunks) <= SINGLE_PASS_SUMMARY_MAX_CHUNKS
         ):
-            data = self._generate_json(build_summary_prompt(cleaned), temperature=0.2)
+            data = self._generate_json(
+                build_summary_prompt(cleaned),
+                temperature=0.2,
+                max_output_tokens=4096,
+            )
             return data if isinstance(data, dict) else {}
 
         chunk_notes: list[dict[str, Any]] = []
@@ -216,10 +220,18 @@ class GeminiService:
                 chunk_notes.append(chunk_data)
 
         if not chunk_notes:
-            fallback = self._generate_json(build_summary_prompt(cleaned), temperature=0.2)
+            fallback = self._generate_json(
+                build_summary_prompt(cleaned),
+                temperature=0.2,
+                max_output_tokens=4096,
+            )
             return fallback if isinstance(fallback, dict) else {}
 
-        reduced_data = self._generate_json(build_summary_reduce_prompt(chunk_notes), temperature=0.2)
+        reduced_data = self._generate_json(
+            build_summary_reduce_prompt(chunk_notes),
+            temperature=0.2,
+            max_output_tokens=3000,
+        )
         reduced = reduced_data if isinstance(reduced_data, dict) else {
             "key_definitions": [],
             "core_concepts": [],
@@ -234,12 +246,14 @@ class GeminiService:
                 transcript_excerpt=cleaned,
             ),
             temperature=0.2,
+            max_output_tokens=4096,
         )
         candidate = synthesis if isinstance(synthesis, dict) else reduced
 
         validation = self._generate_json(
             build_summary_validation_prompt(candidate_summary=candidate, reduced_notes=reduced),
             temperature=0.1,
+            max_output_tokens=4096,
         )
         validated = validation if isinstance(validation, dict) else candidate
         return validated
@@ -247,7 +261,7 @@ class GeminiService:
     def summarize(self, transcript: str) -> StructuredSummary:
         cleaned = clean_transcript_text(transcript)
         prompt = build_summary_prompt(cleaned)
-        data = self._generate_json(prompt, temperature=0.2)
+        data = self._generate_json(prompt, temperature=0.2, max_output_tokens=4096)
 
         if not isinstance(data, dict):
             data = self._generate_json(
@@ -255,6 +269,7 @@ class GeminiService:
                 + "\n\nYour previous response was valid JSON but had the wrong top-level shape. "
                 + "Return exactly one JSON object with the schema above, not an array or scalar.",
                 temperature=0.1,
+                max_output_tokens=4096,
             )
 
         if not isinstance(data, dict):

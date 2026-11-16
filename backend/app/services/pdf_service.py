@@ -79,7 +79,7 @@ class PDFService:
         story.append(Paragraph("brainbyts Study Notes", styles["title"]))
         story.append(Paragraph(datetime.now().strftime("Generated on %Y-%m-%d %H:%M"), styles["meta"]))
 
-        self._section(story, "3-Paragraph Lecture Synthesis", summary.overview_paragraphs, styles)
+        self._section(story, "Detailed Topic Summary", summary.overview_paragraphs, styles)
         self._section(story, "Key Definitions", summary.key_definitions, styles)
         self._section(story, "Core Concepts", summary.core_concepts, styles)
         self._section(story, "Important Examples", summary.important_examples, styles)

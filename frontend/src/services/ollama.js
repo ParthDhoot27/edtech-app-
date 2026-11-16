@@ -29,7 +29,7 @@ function normalizedBaseUrl(baseUrl) {
 }
 
 async function ollamaFetch(url, options = {}) {
-  const { timeoutMs = 120000, ...requestOptions } = options;
+  const { timeoutMs = 600000, ...requestOptions } = options;
   const controller = new AbortController();
   const timeoutId = window.setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -71,7 +71,7 @@ export async function listOllamaModels(baseUrl = getOllamaSettings().baseUrl) {
   return (data.models || []).map((item) => item.name).filter(Boolean);
 }
 
-async function generate(prompt, { json = false, images = [], messages = null, timeoutMs = 120000, numPredict = 768 } = {}) {
+async function generate(prompt, { json = false, images = [], messages = null, timeoutMs = 600000, numPredict = 768 } = {}) {
   const { baseUrl, model } = getOllamaSettings();
   if (!model) {
     throw new Error("Choose an installed Ollama model in the provider settings first.");
@@ -84,8 +84,23 @@ async function generate(prompt, { json = false, images = [], messages = null, ti
   }
 
   const payload = messages
-    ? { model, messages, stream: false }
-    : { model, prompt, stream: false, options: { temperature: 0.2, num_predict: numPredict } };
+    ? {
+        model,
+        messages,
+        stream: false,
+        options: { repeat_last_n: 128, repeat_penalty: 1.15 },
+      }
+    : {
+        model,
+        prompt,
+        stream: false,
+        options: {
+          temperature: 0.2,
+          num_predict: numPredict,
+          repeat_last_n: 128,
+          repeat_penalty: 1.15,
+        },
+      };
   if (json && !messages) payload.format = "json";
   if (images.length && messages) {
     payload.messages = messages.map((message, index) =>
@@ -101,6 +116,12 @@ async function generate(prompt, { json = false, images = [], messages = null, ti
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     const reason = getMessageFromError(data, `Ollama returned HTTP ${response.status}.`);
+    if (/prediction aborted, token repeat limit reached/i.test(reason)) {
+      throw new Error(
+        "Ollama stopped generation because the model repeated the same token too many times. " +
+          "Retry with a different Ollama model or update Ollama; this is a model-generation issue, not a timeout.",
+      );
+    }
     if (/model .* not found/i.test(reason)) {
       throw new Error(`The selected model is not installed in Ollama. Run: ollama pull ${model}`);
     }
@@ -118,12 +139,12 @@ function parseJson(text) {
   return JSON.parse(firstObject >= 0 ? unfenced.slice(firstObject, lastObject + 1) : unfenced);
 }
 
-async function generateJson(prompt) {
-  const raw = await generate(prompt, { json: true, timeoutMs: 300000, numPredict: 768 });
+async function generateJson(prompt, numPredict = 768) {
+  const raw = await generate(prompt, { json: true, timeoutMs: 600000, numPredict });
   try {
     return parseJson(raw);
   } catch {
-    const retry = await generate(`${prompt}\n\nReturn one valid JSON object only.`, { json: true, timeoutMs: 300000, numPredict: 768 });
+    const retry = await generate(`${prompt}\n\nReturn one valid JSON object only.`, { json: true, timeoutMs: 600000, numPredict });
     try {
       return parseJson(retry);
     } catch {
@@ -132,30 +153,54 @@ async function generateJson(prompt) {
   }
 }
 
+function formatStructuredValue(value) {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    return value.map(formatStructuredValue).filter(Boolean).join("\n");
+  }
+  if (value && typeof value === "object") {
+    return Object.entries(value)
+      .map(([key, child]) => {
+        const label = key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+        const formattedChild = formatStructuredValue(child);
+        return formattedChild ? `${label}: ${formattedChild}` : "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
 function asStringList(value) {
-  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  if (Array.isArray(value)) return value.map(formatStructuredValue).filter(Boolean);
   if (typeof value === "string") return value.split("\n").map((item) => item.replace(/^\s*[-*]\s*/, "").trim()).filter(Boolean);
+  if (value && typeof value === "object") {
+    const formatted = formatStructuredValue(value);
+    return formatted ? [formatted] : [];
+  }
   return [];
 }
 
 export async function summarizeWithOllama(transcript) {
   const source = transcript.slice(0, 26000);
   const promptFor = (material, instruction = "Create") =>
-    `You are an expert academic assistant. ${instruction} a concise study summary from the lecture transcript. Return a JSON object with exactly these keys: overview_paragraphs (exactly 3 short paragraphs, 1-2 sentences each), key_definitions, core_concepts, important_examples, exam_revision_points (each an array of at most 3 concise strings). Keep claims grounded in the transcript. Do not add commentary.\n\nTranscript:\n${material}`;
+    `You are an expert academic tutor. ${instruction} a detailed, student-friendly study summary from the lecture transcript. Return JSON only with these keys: overview_paragraphs (as many paragraphs as needed to explain the topic fully), key_definitions, core_concepts, important_examples, exam_revision_points. Every value must be an array of plain text strings, never objects. Do not impose fixed item counts or shorten explanations. Explain why important concepts matter and develop examples with their reasoning, application, and relevance. Include likely exam blind spots only as clearly labeled inferences; do not present unsupported facts as source material. Keep source facts grounded in the transcript.\n\nTranscript:\n${material}`;
   let data;
   if (source.length <= 7000) {
-    data = await generateJson(promptFor(source));
+    data = await generateJson(promptFor(source), 4096);
   } else {
     const notes = [];
     for (let start = 0; start < source.length; start += 6000) {
-      notes.push(await generateJson(promptFor(source.slice(start, start + 6000), "Extract the key information and draft")));
+      notes.push(await generateJson(promptFor(source.slice(start, start + 6000), "Extract the key information and draft"), 2048));
     }
     data = await generateJson(
-      `Combine these lecture segment summaries into one coherent, non-repetitive study summary. Return exactly 3 overview paragraphs and concise arrays for key_definitions, core_concepts, important_examples, and exam_revision_points. Return JSON only with those keys.\n\nSegment summaries:\n${JSON.stringify(notes)}`,
+      `Combine these lecture segment summaries into a thorough, coherent, non-repetitive study guide. Return JSON only with overview_paragraphs, key_definitions, core_concepts, important_examples, and exam_revision_points. Every value must be an array of plain text strings, never objects. Use as many paragraphs and items as needed. Explain why concepts matter and expand examples with reasoning and applications. Preserve source grounding, and label possible exam blind spots as inferences rather than facts.\n\nSegment summaries:\n${JSON.stringify(notes)}`,
+      4096,
     );
   }
   const summary = {
-    overview_paragraphs: asStringList(data.overview_paragraphs || data.three_paragraph_summary).slice(0, 3),
+    overview_paragraphs: asStringList(data.overview_paragraphs || data.three_paragraph_summary),
     key_definitions: asStringList(data.key_definitions),
     core_concepts: asStringList(data.core_concepts),
     important_examples: asStringList(data.important_examples),

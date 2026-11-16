@@ -4,10 +4,10 @@ function Footer() {
       <div className="site-footer-inner">
         <p className="site-footer-title">brainbyts</p>
         <p className="site-footer-members">
-          Team Members: T. Pavan Karthik, K. Uday Bhaskar Reddy
+          Group 16, Business and Management Project
         </p>
         <p className="site-footer-institute">
-          Vel Tech Rangarajan Dr. Sagunthala R&D Institute of Science and Technology
+          JK Lakshmipat University
         </p>
       </div>
     </footer>
