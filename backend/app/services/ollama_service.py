@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import time
 from typing import Any
 
@@ -19,6 +20,8 @@ from app.core.prompts import (
 from app.models.schemas import ChatMessage, MCQItem, StructuredSummary
 from app.services.llm_utils import extract_json_payload, normalize_mcq_item, normalize_summary
 from app.services.pipeline_utils import clean_transcript_text, split_into_chunks, validate_structured_summary
+
+logger = logging.getLogger(__name__)
 
 
 class OllamaService:
@@ -116,8 +119,10 @@ class OllamaService:
 
         text = str(data.get("response", "")).strip()
         if not text:
-            self._mark_unavailable("Ollama returned an empty response.")
-            raise RuntimeError("Ollama returned an empty response.")
+            # Do NOT mark unavailable for empty responses — the model may just need a smaller prompt.
+            # Only connection/HTTP errors should trigger the cooldown blacklist.
+            logger.warning("Ollama returned an empty response for model %s. Try a shorter prompt.", self._model_name)
+            raise RuntimeError("Ollama returned an empty response. Try a shorter transcript or a different model.")
 
         self._clear_unavailable()
         return text
@@ -150,22 +155,24 @@ class OllamaService:
         self._clear_unavailable()
         return f"Model '{model_name}' pull initiated successfully."
 
+    def _generate_json(
+        self,
+        prompt: str,
+        temperature: float = 0.2,
+        model: str | None = None,
+    ) -> Any:
         response_text = self._generate(prompt=prompt, temperature=temperature, model=model)
-
         try:
             return extract_json_payload(response_text)
         except Exception:
-            retry_prompt = prompt + "\n\nReturn JSON only. No markdown."
+            retry_prompt = prompt + "\n\nReturn JSON only. No markdown, no commentary."
             retry_text = self._generate(prompt=retry_prompt, temperature=max(0.1, temperature - 0.1), model=model)
-            return extract_json_payload(retry_text)
-        except Exception:
-            retry_prompt = prompt + "\n\nReturn JSON only. No markdown."
-            retry_text = self._generate(prompt=retry_prompt, temperature=max(0.1, temperature - 0.1))
             return extract_json_payload(retry_text)
 
     def summarize(self, transcript: str) -> StructuredSummary:
         cleaned = clean_transcript_text(transcript)
-        chunks = split_into_chunks(cleaned, max_chars=2400, overlap_chars=200, max_chunks=8)
+        # Use smaller chunks for local models (3b params can't handle large contexts)
+        chunks = split_into_chunks(cleaned, max_chars=1200, overlap_chars=100, max_chunks=6)
 
         if not chunks:
             data = self._generate_json(build_summary_prompt(cleaned), temperature=0.2)

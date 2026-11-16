@@ -148,7 +148,7 @@ export async function summarizeTranscript(payload) {
   }
   const response = await requestWithFallback(
     () => apiClient.post("/summarize", payload, {
-      timeout: 120000,
+      timeout: 240000,  // 4 minutes – Gemini can take 2+ min on long transcripts
       headers: getGeminiApiKey() ? { "X-Gemini-Api-Key": getGeminiApiKey() } : {},
     }),
     false,

@@ -2,10 +2,24 @@ from __future__ import annotations
 
 import json
 from typing import Any
-import logging
+
+# Timeout (seconds) for Gemini API calls – 180s backend timeout gives headroom
+# under the 240s frontend axios timeout for /summarize
+REQUEST_TIMEOUT_SECONDS = 180
+
 
 from google.api_core.retry import Retry
 import google.generativeai as genai
+
+# Retry policy: no automatic retries – we handle failover manually in _generate()
+# deadline matches REQUEST_TIMEOUT_SECONDS so the retry wrapper never fires before our own timeout
+STRICT_RETRY = Retry(
+    initial=1.0,
+    maximum=10.0,
+    multiplier=2.0,
+    deadline=REQUEST_TIMEOUT_SECONDS,
+    predicate=lambda exc: False,  # never auto-retry; surface errors immediately
+)
 
 from app.core.prompts import (
     build_chat_prompt,
@@ -21,13 +35,16 @@ from app.models.schemas import ChatMessage, MCQItem, StructuredSummary
 from app.services.llm_utils import extract_json_payload, normalize_mcq_item, normalize_summary
 from app.services.pipeline_utils import clean_transcript_text, split_into_chunks, validate_structured_summary
 
+import logging
+
 logger = logging.getLogger(__name__)
+
 
 SINGLE_PASS_SUMMARY_MAX_CHARS = 7000
 SINGLE_PASS_SUMMARY_MAX_CHUNKS = 2
 
-REQUEST_TIMEOUT_SECONDS = 45.0
-STRICT_RETRY = Retry(initial=1.0, maximum=2.0, multiplier=1.5, timeout=REQUEST_TIMEOUT_SECONDS)
+
+
 DEFAULT_GEMINI_MODEL = "models/gemini-3.8-flash"
 SUPPORTED_FALLBACK_MODELS = [
     "models/gemini-3.8-flash",
@@ -260,7 +277,14 @@ class GeminiService:
 
     def summarize(self, transcript: str) -> StructuredSummary:
         cleaned = clean_transcript_text(transcript)
-        prompt = build_summary_prompt(cleaned)
+        # Trim to ~100k chars (~25k tokens) – keeps response fast and within Gemini's sweet spot.
+        # Longer transcripts hit the 180s timeout; chunked multi-pass handles truly huge inputs.
+        trimmed = cleaned[:100_000] if len(cleaned) > 100_000 else cleaned
+        logger.debug(
+            "Gemini summarize: original_len=%d trimmed_len=%d model=%s timeout=%ds",
+            len(cleaned), len(trimmed), self._model_name, REQUEST_TIMEOUT_SECONDS,
+        )
+        prompt = build_summary_prompt(trimmed)
         data = self._generate_json(prompt, temperature=0.2, max_output_tokens=4096)
 
         if not isinstance(data, dict):
@@ -276,7 +300,7 @@ class GeminiService:
             raise RuntimeError("Could not parse structured summary from model response.")
 
         summary = normalize_summary(data)
-        summary = validate_structured_summary(summary, cleaned)
+        summary = validate_structured_summary(summary, trimmed)
 
         if not any(
             [

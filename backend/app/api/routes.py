@@ -236,8 +236,11 @@ async def summarize(
     current_user: AuthUser = Depends(_get_current_user),
     gemini_api_key: str | None = Header(default=None, alias="X-Gemini-Api-Key"),
 ) -> SummarizeResponse:
-    cleaned_transcript = clean_transcript_text(payload.transcript)
+    
     session_id = _ensure_user_session(payload.session_id, current_user)
+
+    # Clean the transcript text before passing to Gemini
+    cleaned_transcript = clean_transcript_text(payload.transcript)
 
     try:
         summary = await asyncio.to_thread(
