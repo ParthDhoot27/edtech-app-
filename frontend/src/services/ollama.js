@@ -183,29 +183,71 @@ function asStringList(value) {
 }
 
 export async function summarizeWithOllama(transcript) {
-  const source = transcript.slice(0, 26000);
-  const promptFor = (material, instruction = "Create") =>
-    `You are an expert academic tutor. ${instruction} a detailed, student-friendly study summary from the lecture transcript. Return JSON only with these keys: overview_paragraphs (as many paragraphs as needed to explain the topic fully), key_definitions, core_concepts, important_examples, exam_revision_points. Every value must be an array of plain text strings, never objects. Do not impose fixed item counts or shorten explanations. Explain why important concepts matter and develop examples with their reasoning, application, and relevance. Include likely exam blind spots only as clearly labeled inferences; do not present unsupported facts as source material. Keep source facts grounded in the transcript.\n\nTranscript:\n${material}`;
+  // Keep transcript small enough for 3-7B local models (≈4k token context)
+  const source = transcript.slice(0, 18000);
+
+  // Simple prompt that even small models handle reliably
+  const buildPrompt = (text) =>
+    `You are an academic tutor. Read this lecture transcript and return a JSON object with exactly these keys:
+- overview_paragraphs: array of strings, 2-4 sentences each summarising the topic
+- key_definitions: array of strings like "Term: definition"
+- core_concepts: array of strings, one concept per item
+- important_examples: array of strings, one example per item
+- exam_revision_points: array of strings, one revision point per item
+
+Rules: Return ONLY the JSON object. No markdown. No extra keys. Every value must be an array of strings.
+
+Transcript:
+${text}`;
+
   let data;
-  if (source.length <= 7000) {
-    data = await generateJson(promptFor(source), 4096);
+
+  if (source.length <= 5000) {
+    // Short transcript – single pass
+    data = await generateJson(buildPrompt(source), 2048);
   } else {
-    const notes = [];
-    for (let start = 0; start < source.length; start += 6000) {
-      notes.push(await generateJson(promptFor(source.slice(start, start + 6000), "Extract the key information and draft"), 2048));
+    // Split into small chunks so the model doesn't run out of context
+    const CHUNK_SIZE = 4500;
+    const chunkPromises = [];
+    for (let start = 0; start < source.length; start += CHUNK_SIZE) {
+      const slice = source.slice(start, start + CHUNK_SIZE);
+      chunkPromises.push(generateJson(buildPrompt(slice), 1536).catch(() => null));
     }
-    data = await generateJson(
-      `Combine these lecture segment summaries into a thorough, coherent, non-repetitive study guide. Return JSON only with overview_paragraphs, key_definitions, core_concepts, important_examples, and exam_revision_points. Every value must be an array of plain text strings, never objects. Use as many paragraphs and items as needed. Explain why concepts matter and expand examples with reasoning and applications. Preserve source grounding, and label possible exam blind spots as inferences rather than facts.\n\nSegment summaries:\n${JSON.stringify(notes)}`,
-      4096,
-    );
+    const chunkResults = await Promise.all(chunkPromises);
+    const validChunks = chunkResults.filter(Boolean);
+
+    if (validChunks.length === 0) {
+      // All chunks failed — try one last time with a smaller slice
+      data = await generateJson(buildPrompt(source.slice(0, 4000)), 2048);
+    } else if (validChunks.length === 1) {
+      data = validChunks[0];
+    } else {
+      // Merge all chunk results into one summary
+      const mergePrompt = `Combine these JSON summaries into one final JSON study guide with keys: overview_paragraphs, key_definitions, core_concepts, important_examples, exam_revision_points. Each value must be an array of plain text strings. Remove duplicates. Return ONLY the JSON object.
+
+Summaries:
+${JSON.stringify(validChunks)}`;
+      data = await generateJson(mergePrompt, 2048).catch(() => {
+        // If merge fails, just flatten the chunks manually
+        const merged = { overview_paragraphs: [], key_definitions: [], core_concepts: [], important_examples: [], exam_revision_points: [] };
+        for (const chunk of validChunks) {
+          for (const key of Object.keys(merged)) {
+            merged[key].push(...asStringList(chunk[key] || []));
+          }
+        }
+        return merged;
+      });
+    }
   }
+
   const summary = {
-    overview_paragraphs: asStringList(data.overview_paragraphs || data.three_paragraph_summary),
-    key_definitions: asStringList(data.key_definitions),
-    core_concepts: asStringList(data.core_concepts),
-    important_examples: asStringList(data.important_examples),
-    exam_revision_points: asStringList(data.exam_revision_points),
+    overview_paragraphs: asStringList(data.overview_paragraphs || data.three_paragraph_summary || data.summary),
+    key_definitions: asStringList(data.key_definitions || data.definitions),
+    core_concepts: asStringList(data.core_concepts || data.concepts),
+    important_examples: asStringList(data.important_examples || data.examples),
+    exam_revision_points: asStringList(data.exam_revision_points || data.revision_points || data.key_points),
   };
+
   if (!Object.values(summary).some((items) => items.length)) {
     throw new Error("Ollama produced an empty summary. Try another model or transcript.");
   }
